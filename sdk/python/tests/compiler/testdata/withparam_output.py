@@ -13,7 +13,6 @@
 # limitations under the License.
 
 import kfp.dsl as dsl
-from kfp.dsl import _for_loop
 
 
 @dsl.pipeline(name='my-pipeline')
