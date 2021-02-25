@@ -274,7 +274,7 @@ spec:
           image: python:3.7
           name: main
       timeout: 0s
-    - name: for-loop-for-loop-d5635317-1
+    - name: for-loop-for-loop-00000001-1
       params:
       - name: produce-list-of-strings-Output
         value: $(tasks.produce-list-of-strings.results.output)
@@ -288,8 +288,8 @@ spec:
       taskRef:
         apiVersion: custom.tekton.dev/v1alpha1
         kind: PipelineLoop
-        name: for-loop-for-loop-d5635317-1
-    - name: for-loop-for-loop-eb7e60e4-2
+        name: for-loop-for-loop-00000001-1
+    - name: for-loop-for-loop-00000002-2
       params:
       - name: produce-list-of-ints-Output
         value: $(tasks.produce-list-of-ints.results.output)
@@ -300,8 +300,8 @@ spec:
       taskRef:
         apiVersion: custom.tekton.dev/v1alpha1
         kind: PipelineLoop
-        name: for-loop-for-loop-eb7e60e4-2
-    - name: for-loop-for-loop-1fba216b-3
+        name: for-loop-for-loop-00000002-2
+    - name: for-loop-for-loop-00000003-3
       params:
       - name: produce-list-of-dicts-Output
         value: $(tasks.produce-list-of-dicts.results.output)
@@ -312,5 +312,5 @@ spec:
       taskRef:
         apiVersion: custom.tekton.dev/v1alpha1
         kind: PipelineLoop
-        name: for-loop-for-loop-1fba216b-3
+        name: for-loop-for-loop-00000003-3
   timeout: 0s
