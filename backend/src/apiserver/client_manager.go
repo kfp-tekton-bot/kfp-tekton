@@ -25,6 +25,7 @@ import (
 	"github.com/jinzhu/gorm"
 	_ "github.com/jinzhu/gorm/dialects/sqlite"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/archive"
+	"github.com/kubeflow/pipelines/backend/src/apiserver/auth"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/client"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/common"
 	"github.com/kubeflow/pipelines/backend/src/apiserver/model"
@@ -46,8 +47,6 @@ const (
 	mysqlPassword          = "DBConfig.Password"
 	mysqlDBName            = "DBConfig.DBName"
 	mysqlGroupConcatMaxLen = "DBConfig.GroupConcatMaxLen"
-	kfamServiceHost        = "PROFILES_KFAM_SERVICE_HOST"
-	kfamServicePort        = "PROFILES_KFAM_SERVICE_PORT"
 	mysqlExtraParams       = "DBConfig.ExtraParams"
 	archiveLogFileName     = "ARCHIVE_LOG_FILE_NAME"
 	archiveLogPathPrefix   = "ARCHIVE_LOG_PATH_PREFIX"
@@ -56,27 +55,29 @@ const (
 	visualizationServicePort = "ML_PIPELINE_VISUALIZATIONSERVER_SERVICE_PORT"
 
 	initConnectionTimeout = "InitConnectionTimeout"
+
+	clientQPS   = "ClientQPS"
+	clientBurst = "ClientBurst"
 )
 
 // Container for all service clients
 type ClientManager struct {
-	db                     *storage.DB
-	experimentStore        storage.ExperimentStoreInterface
-	pipelineStore          storage.PipelineStoreInterface
-	jobStore               storage.JobStoreInterface
-	runStore               storage.RunStoreInterface
-	resourceReferenceStore storage.ResourceReferenceStoreInterface
-	dBStatusStore          storage.DBStatusStoreInterface
-	defaultExperimentStore storage.DefaultExperimentStoreInterface
-	objectStore            storage.ObjectStoreInterface
-	// argoClient             client.ArgoClientInterface
-	tektonClient  client.TektonClientInterface
-	swfClient     client.SwfClientInterface
-	k8sCoreClient client.KubernetesCoreInterface
-	kfamClient    client.KFAMClientInterface
-	logArchive    archive.LogArchiveInterface
-	time          util.TimeInterface
-	uuid          util.UUIDGeneratorInterface
+	db                        *storage.DB
+	experimentStore           storage.ExperimentStoreInterface
+	pipelineStore             storage.PipelineStoreInterface
+	jobStore                  storage.JobStoreInterface
+	runStore                  storage.RunStoreInterface
+	resourceReferenceStore    storage.ResourceReferenceStoreInterface
+	dBStatusStore             storage.DBStatusStoreInterface
+	defaultExperimentStore    storage.DefaultExperimentStoreInterface
+	objectStore               storage.ObjectStoreInterface
+	swfClient                 client.SwfClientInterface
+	k8sCoreClient             client.KubernetesCoreInterface
+	subjectAccessReviewClient client.SubjectAccessReviewInterface
+	logArchive                archive.LogArchiveInterface
+	time                      util.TimeInterface
+	uuid                      util.UUIDGeneratorInterface
+	tektonClient              client.TektonClientInterface
 }
 
 func (c *ClientManager) ExperimentStore() storage.ExperimentStoreInterface {
@@ -111,10 +112,6 @@ func (c *ClientManager) ObjectStore() storage.ObjectStoreInterface {
 	return c.objectStore
 }
 
-// func (c *ClientManager) ArgoClient() client.ArgoClientInterface {
-// 	return c.argoClient
-// }
-
 func (c *ClientManager) TektonClient() client.TektonClientInterface {
 	return c.tektonClient
 }
@@ -127,8 +124,12 @@ func (c *ClientManager) KubernetesCoreClient() client.KubernetesCoreInterface {
 	return c.k8sCoreClient
 }
 
-func (c *ClientManager) KFAMClient() client.KFAMClientInterface {
-	return c.kfamClient
+func (c *ClientManager) SubjectAccessReviewClient() client.SubjectAccessReviewInterface {
+	return c.subjectAccessReviewClient
+}
+
+func (c *ClientManager) TokenReviewClient() client.TokenReviewInterface {
+	return c.tokenReviewClient
 }
 
 func (c *ClientManager) LogArchive() archive.LogArchiveInterface {
@@ -141,6 +142,10 @@ func (c *ClientManager) Time() util.TimeInterface {
 
 func (c *ClientManager) UUID() util.UUIDGeneratorInterface {
 	return c.uuid
+}
+
+func (c *ClientManager) Authenticators() []auth.Authenticator {
+	return c.authenticators
 }
 
 func (c *ClientManager) init() {
@@ -176,7 +181,9 @@ func (c *ClientManager) init() {
 	c.logArchive = initLogArchive()
 
 	if common.IsMultiUserMode() {
-		c.kfamClient = client.NewKFAMClient(common.GetStringConfig(kfamServiceHost), common.GetStringConfig(kfamServicePort))
+		c.subjectAccessReviewClient = client.CreateSubjectAccessReviewClientOrFatal(common.GetDurationConfig(initConnectionTimeout), clientParams)
+		c.tokenReviewClient = client.CreateTokenReviewClientOrFatal(common.GetDurationConfig(initConnectionTimeout), clientParams)
+		c.authenticators = auth.GetAuthenticators(c.tokenReviewClient)
 	}
 	glog.Infof("Client manager initialized successfully")
 }
@@ -234,6 +241,11 @@ func initDBClient(initConnectionTimeout time.Duration) *storage.DB {
 		glog.Fatalf("Failed to drop unique key on experiment name. Error: %s", response.Error)
 	}
 
+	response = db.Model(&model.Pipeline{}).RemoveIndex("Name")
+	if response.Error != nil {
+		glog.Fatalf("Failed to drop unique key on pipeline name. Error: %s", response.Error)
+	}
+
 	response = db.Model(&model.ResourceReference{}).ModifyColumn("Payload", "longtext not null")
 	if response.Error != nil {
 		glog.Fatalf("Failed to update the resource reference payload type. Error: %s", response.Error)
@@ -247,6 +259,11 @@ func initDBClient(initConnectionTimeout time.Duration) *storage.DB {
 	response = db.Model(&model.RunDetail{}).AddIndex("experimentuuid_conditions_finishedatinsec", "ExperimentUUID", "Conditions", "FinishedAtInSec")
 	if response.Error != nil {
 		glog.Fatalf("Failed to create index experimentuuid_conditions_finishedatinsec on run_details. Error: %s", response.Error)
+	}
+
+	response = db.Model(&model.Pipeline{}).AddUniqueIndex("name_namespace_index", "Name", "Namespace")
+	if response.Error != nil {
+		glog.Fatalf("Failed to create index name_namespace_index on run_details. Error: %s", response.Error)
 	}
 
 	response = db.Model(&model.RunMetric{}).
@@ -276,7 +293,7 @@ func initDBClient(initConnectionTimeout time.Duration) *storage.DB {
 	}
 
 	// If the old unique index idx_pipeline_version_uuid_name on pipeline_versions exists, remove it.
-	rows, err := db.Raw(`show index from pipeline_versions where Key_name="idx_pipeline_version_uuid_name"`).Rows()
+	rows, err := db.Raw(`show index from pipeline_versions where Key_name='idx_pipeline_version_uuid_name'`).Rows()
 	if err != nil {
 		glog.Fatalf("Failed to query pipeline_version table's indices. Error: %s", err)
 	}
@@ -312,7 +329,10 @@ func initMysql(driverName string, initConnectionTimeout time.Duration) string {
 	}
 	b := backoff.NewExponentialBackOff()
 	b.MaxElapsedTime = initConnectionTimeout
-	err = backoff.Retry(operation, b)
+	//err = backoff.Retry(operation, b)
+	backoff.RetryNotify(operation, b, func(e error, duration time.Duration) {
+		glog.Errorf("%v", e)
+	})
 
 	defer db.Close()
 	util.TerminateIfError(err)
@@ -382,10 +402,8 @@ func createMinioBucket(minioClient *minio.Client, bucketName, region string) {
 }
 
 func initLogArchive() (logArchive archive.LogArchiveInterface) {
-	logFileName := common.GetStringConfigWithDefault(
-		"ArchiveConfig.LogFileName", os.Getenv(archiveLogFileName))
-	logPathPrefix := common.GetStringConfigWithDefault(
-		"ArchiveConfig.LogPathPrefix", os.Getenv(archiveLogPathPrefix))
+	logFileName := common.GetStringConfigWithDefault(archiveLogFileName, "")
+	logPathPrefix := common.GetStringConfigWithDefault(archiveLogPathPrefix, "")
 
 	if logFileName != "" && logPathPrefix != "" {
 		logArchive = archive.NewLogArchive(logPathPrefix, logFileName)
