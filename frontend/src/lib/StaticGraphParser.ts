@@ -91,7 +91,7 @@ function buildTektonDag(graph: dagre.graphlib.Graph, template: any): void {
   const pipeline = template;
 
   if (!template || !template.spec) {
-    throw new Error("Graph template or DAG object doesn't exist.");
+    throw new Error("Graph template or template spec doesn't exist.");
   }
 
   const tasks = (pipeline['spec']['pipelineSpec']['tasks'] || []).concat(
