@@ -71,6 +71,8 @@ KFP_COMPONENT_SPEC_ANNOTATION_KEY = 'pipelines.kubeflow.org/component_spec'
 KFP_PARAMETER_ARGUMENTS_ANNOTATION_KEY = 'pipelines.kubeflow.org/arguments.parameters'
 METADATA_EXECUTION_ID_LABEL_KEY = 'pipelines.kubeflow.org/metadata_execution_id'
 METADATA_CONTEXT_ID_LABEL_KEY = 'pipelines.kubeflow.org/metadata_context_id'
+KFP_SDK_TYPE_LABEL_KEY = 'pipelines.kubeflow.org/pipeline-sdk-type'
+TFX_SDK_TYPE_VALUE = 'tfx'
 METADATA_ARTIFACT_IDS_ANNOTATION_KEY = 'pipelines.kubeflow.org/metadata_artifact_ids'
 METADATA_INPUT_ARTIFACT_IDS_ANNOTATION_KEY = 'pipelines.kubeflow.org/metadata_input_artifact_ids'
 METADATA_OUTPUT_ARTIFACT_IDS_ANNOTATION_KEY = 'pipelines.kubeflow.org/metadata_output_artifact_ids'
@@ -131,6 +133,8 @@ def is_tfx_pod(pod) -> bool:
     main_container = main_containers[0]
     return main_container.command and main_container.command[-1].endswith('tfx/orchestration/kubeflow/container_entrypoint.py')
 
+def is_kfp_v2_pod(pod) -> bool:
+    return pod.metadata.annotations.get(KFP_V2_COMPONENT_ANNOTATION_KEY) == KFP_V2_COMPONENT_ANNOTATION_VALUE
 
 def get_component_template(obj):
     '''
@@ -226,6 +230,10 @@ while True:
 
             # Skip TFX pods - they have their own metadata writers
             if is_tfx_pod(obj):
+                continue
+
+            # Skip KFP v2 pods - they have their own metadat writers
+            if is_kfp_v2_pod(obj):
                 continue
 
             pipeline_name = obj.metadata.labels[PIPELINE_LABEL_KEY] # Should exist due to initial filtering
